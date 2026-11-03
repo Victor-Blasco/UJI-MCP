@@ -571,6 +571,45 @@ if mcp:
     mcp.tool()(sync_assignments_to_gtasks)
 
 
+def process_auth_input(raw_input: str) -> None:
+    """Procesa de forma flexible cualquier tipo de entrada de autenticación:
+    - Cookie MoodleSessionaulavirtualuji
+    - Token de 32 caracteres directo
+    - URL de redirección moodlemobile://token=...
+    """
+    raw_input = raw_input.strip()
+
+    # 1. Si es una URL moodlemobile://token=...
+    if "token=" in raw_input:
+        raw_payload = raw_input.split("token=")[1].split("&")[0]
+        decoded = base64.b64decode(raw_payload).decode("utf-8", "ignore")
+        parts = decoded.split(":::") if ":::" in decoded else decoded.split("###")
+        token = parts[1] if len(parts) > 1 else parts[0]
+        _verify_and_save_token(token)
+        return
+
+    # 2. Si ya es directamente un wstoken de 32 caracteres hexadecimales
+    if re.fullmatch(r"[0-9a-fA-F]{32}", raw_input):
+        try:
+            _verify_and_save_token(raw_input)
+            return
+        except Exception:
+            # Si falla como token, intentar como cookie por si coincide la longitud
+            pass
+
+    # 3. Flujo mediante cookie de sesión MoodleSessionaulavirtualuji
+    login_flow_from_cookie(raw_input)
+
+
+def _verify_and_save_token(token: str) -> None:
+    """Valida un wstoken contra la API y lo guarda si es correcto."""
+    os.environ["MOODLE_TOKEN"] = token.strip()
+    info = call_moodle_api("core_webservice_get_site_info")
+    save_token(token, info)
+    print(f"\n[OK] Autenticacion completada con exito para: {info.get('fullname')} ({info.get('username')})")
+    print(f"Token permanente guardado en: {TOKEN_FILE}")
+
+
 def login_flow_from_cookie(cookie_val: str) -> None:
     """Extrae automáticamente el wstoken permanente usando una cookie de sesión MoodleSessionaulavirtualuji."""
     cookie_val = cookie_val.strip()
@@ -582,7 +621,10 @@ def login_flow_from_cookie(cookie_val: str) -> None:
     loc = resp.headers.get("Location", "")
 
     if "token=" not in loc:
-        raise RuntimeError("No se pudo obtener la redirección de Moodle Mobile. Verifica que la cookie sea correcta y la sesión esté activa.")
+        raise RuntimeError(
+            "No se pudo obtener la redirección de Moodle Mobile. "
+            "Verifica que la cookie sea correcta y que la sesión del navegador siga activa."
+        )
 
     raw_payload = loc.split("token=")[1].split("&")[0]
     decoded = base64.b64decode(raw_payload).decode("utf-8", "ignore")
@@ -590,11 +632,7 @@ def login_flow_from_cookie(cookie_val: str) -> None:
     parts = decoded.split(":::") if ":::" in decoded else decoded.split("###")
     token = parts[1] if len(parts) > 1 else parts[0]
 
-    os.environ["MOODLE_TOKEN"] = token
-    info = call_moodle_api("core_webservice_get_site_info")
-    save_token(token, info)
-    print(f"\n[OK] Autenticación completada con éxito para: {info.get('fullname')} ({info.get('username')})")
-    print(f"Token permanente guardado en: {TOKEN_FILE}")
+    _verify_and_save_token(token)
 
 
 def _cli() -> None:
@@ -622,20 +660,17 @@ def _cli() -> None:
     args = parser.parse_args()
 
     if args.cmd == "login":
-        print("=== Autenticación con Aula Virtual UJI ===")
-        print("1. Abre https://aulavirtual.uji.es en tu navegador con tu sesión iniciada.")
-        print("2. Pulsa F12 -> pestaña Aplicación (Application) -> Cookies -> https://aulavirtual.uji.es")
-        print("3. Copia el valor de la cookie 'MoodleSessionaulavirtualuji'")
+        print("=== Autenticacion con Aula Virtual UJI ===")
+        print("1. Abre https://aulavirtual.uji.es en tu navegador con tu sesion iniciada.")
+        print("2. Pulsa F12 -> pestana Aplicacion (Application o Almacenamiento) -> Cookies -> https://aulavirtual.uji.es")
+        print("3. Copia el valor de la cookie 'MoodleSessionaulavirtualuji' (o tu token si ya lo tienes).")
         print("---------------------------------------------------------------------------------")
-        cookie_in = input("Pega el valor de la cookie aquí: ").strip()
-        login_flow_from_cookie(cookie_in)
+        user_input = input("Pega la cookie (o token): ").strip()
+        process_auth_input(user_input)
     elif args.cmd == "from-cookie":
-        login_flow_from_cookie(args.cookie)
+        process_auth_input(args.cookie)
     elif args.cmd == "set-token":
-        os.environ["MOODLE_TOKEN"] = args.token.strip()
-        info = call_moodle_api("core_webservice_get_site_info")
-        save_token(args.token.strip(), info)
-        print(f"[OK] Token configurado correctamente para: {info.get('fullname')} ({info.get('username')})")
+        _verify_and_save_token(args.token)
     elif args.cmd == "whoami":
         print(json.dumps(get_user_profile(), indent=2, ensure_ascii=False))
     elif args.cmd == "courses":
