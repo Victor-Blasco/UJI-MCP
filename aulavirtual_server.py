@@ -44,27 +44,38 @@ BASE_DIR = Path(__file__).resolve().parent
 TOKEN_FILE = Path(os.environ.get("MOODLE_TOKEN_FILE", BASE_DIR / "aulavirtual_token.json"))
 LOG_FILE = Path(os.environ.get("MOODLE_LOG_FILE", BASE_DIR / "aulavirtual.log"))
 
-# Configuración de trazabilidad (Logging)
+# Configuración de trazabilidad (Logging desactivado por defecto; se activa con --debug o MOODLE_DEBUG=1)
 logger = logging.getLogger("uji-aulavirtual")
 logger.setLevel(logging.DEBUG)
-
-_file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
-_file_handler.setLevel(logging.DEBUG)
-_file_handler.setFormatter(
-    logging.Formatter("%(asctime)s [%(levelname)s] [PID:%(process)d] %(funcName)s: %(message)s")
-)
-logger.addHandler(_file_handler)
+logger.addHandler(logging.NullHandler())
+logger.disabled = True
+DEBUG_ENABLED = False
 
 
-def enable_console_logging(level: int = logging.INFO) -> None:
-    """Activa salida de logs por consola (stderr) para comandos interactivos CLI."""
-    for h in logger.handlers:
-        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
-            return
+def enable_debug_logging() -> None:
+    """Activa la trazabilidad completa en archivo (aulavirtual.log) y por consola (stderr)."""
+    global DEBUG_ENABLED
+    if DEBUG_ENABLED:
+        return
+    DEBUG_ENABLED = True
+    logger.disabled = False
+    os.environ["MOODLE_DEBUG"] = "1"
+
+    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] [PID:%(process)d] %(funcName)s: %(message)s")
+    )
+    logger.addHandler(file_handler)
+
     console = logging.StreamHandler(sys.stderr)
-    console.setLevel(level)
+    console.setLevel(logging.DEBUG)
     console.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
     logger.addHandler(console)
+
+
+if os.environ.get("MOODLE_DEBUG") == "1" or "--debug" in sys.argv:
+    enable_debug_logging()
 
 
 def trace_tool(func: Callable) -> Callable:
@@ -652,7 +663,8 @@ def register_protocol_handler() -> bool:
 
         py_exe = sys.executable
         script_path = str(Path(__file__).resolve())
-        cmd = f'"{py_exe}" "{script_path}" handle-url "%1"'
+        debug_flag = " --debug" if DEBUG_ENABLED else ""
+        cmd = f'"{py_exe}" "{script_path}"{debug_flag} handle-url "%1"'
 
         key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\moodlemobile")
         winreg.SetValue(key, "", winreg.REG_SZ, "URL:Moodle Mobile Protocol")
@@ -781,8 +793,7 @@ setInterval(async () => {{
 
 
 def interactive_login() -> None:
-    """Flujo de login asistido con puente web local + protocolo Windows + trazabilidad completa."""
-    enable_console_logging(logging.INFO)
+    """Flujo de login asistido con puente web local + protocolo Windows."""
     logger.info("=== Iniciando flujo interactive_login ===")
     registered = register_protocol_handler()
 
@@ -798,7 +809,8 @@ def interactive_login() -> None:
     print("  Abriendo asistente de conexión en tu navegador: " + bridge_url)
     print("  1. Pulsa el botón azul 'Conectar con Aula Virtual UJI'.")
     print("  2. Cuando el navegador pregunte '¿Abrir Python?', pulsa ABRIR.")
-    print("  (Trazabilidad detallada guardándose en: " + str(LOG_FILE) + ")")
+    if DEBUG_ENABLED:
+        print("  (Modo DEBUG activo -> Log en: " + str(LOG_FILE) + ")")
     print("=" * 65 + "\n")
 
     webbrowser.open(bridge_url)
@@ -915,8 +927,8 @@ def show_logs(lines: int = 50) -> None:
 
 
 def _cli() -> None:
-    logger.debug("CLI invocado: argv=%s cwd=%s", sys.argv, Path.cwd())
     parser = argparse.ArgumentParser(description="Aula Virtual UJI MCP & CLI")
+    parser.add_argument("--debug", action="store_true", help="Activa trazabilidad detallada (logs en consola y archivo)")
     sub = parser.add_subparsers(dest="cmd")
 
     sub.add_parser("login", help="Inicia sesión interactiva con tu cuenta de la UJI")
@@ -944,11 +956,14 @@ def _cli() -> None:
     p_logs.add_argument("-n", "--lines", type=int, default=50, help="Número de líneas a mostrar")
 
     args = parser.parse_args()
+    if args.debug:
+        enable_debug_logging()
+
+    logger.debug("CLI invocado: argv=%s cwd=%s", sys.argv, Path.cwd())
 
     if args.cmd == "login":
         interactive_login()
     elif args.cmd == "handle-url":
-        enable_console_logging(logging.INFO)
         logger.info("handle-url invocado desde Windows con URL de longitud %d", len(args.url))
         try:
             process_auth_input(args.url)
@@ -956,10 +971,8 @@ def _cli() -> None:
             logger.error("Fallo crítico en handle-url: %s\n%s", exc, traceback.format_exc())
             raise
     elif args.cmd == "from-cookie":
-        enable_console_logging(logging.INFO)
         process_auth_input(args.cookie)
     elif args.cmd == "set-token":
-        enable_console_logging(logging.INFO)
         _verify_and_save_token(args.token)
     elif args.cmd == "whoami":
         print(json.dumps(get_user_profile(), indent=2, ensure_ascii=False))
@@ -970,7 +983,6 @@ def _cli() -> None:
     elif args.cmd == "deadlines":
         print(json.dumps(get_upcoming_deadlines(), indent=2, ensure_ascii=False))
     elif args.cmd == "sync":
-        enable_console_logging(logging.INFO)
         print(json.dumps(sync_assignments_to_gtasks(args.list_title), indent=2, ensure_ascii=False))
     elif args.cmd == "logs":
         show_logs(args.lines)
