@@ -1,0 +1,20 @@
+# Secretos y credenciales personales (NUNCA subir a Git)
+credentials.json
+token.json
+aulavirtual_token.json
+.session.json
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+
+# SO y editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

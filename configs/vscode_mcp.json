@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "uji-aulavirtual": {
+      "command": "python",
+      "args": [
+        "<RUTA_A_UJI_MCP>/aulavirtual_server.py"
+      ]
+    },
+    "google-tasks": {
+      "command": "python",
+      "args": [
+        "<RUTA_A_UJI_MCP>/gtasks_server.py"
+      ]
+    }
+  }
+}
