@@ -1,9 +1,10 @@
-# Secretos y credenciales personales (NUNCA subir a Git)
+# Secretos, credenciales personales y logs locales (NUNCA subir a Git)
 credentials.json
 token.json
 aulavirtual_token.json
 .session.json
 *.env
+*.log
 
 # Python
 __pycache__/

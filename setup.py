@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -143,6 +142,14 @@ def show_test_deadlines():
         print(f"Error consultando entregas: {e}")
 
 
+def show_logs():
+    """Muestra el registro de trazabilidad."""
+    try:
+        subprocess.check_call([PYTHON_EXE, str(AULAVIRTUAL_SCRIPT), "logs", "-n", "60"])
+    except Exception as e:
+        print(f"Error leyendo logs: {e}")
+
+
 def interactive_menu():
     print("=" * 65)
     print("   Pack MCP Aula Virtual UJI & Google Tasks - Configuración")
@@ -152,11 +159,12 @@ def interactive_menu():
     print("3. Conectar tu cuenta de Google Tasks (Opcional)")
     print("4. Generar archivos de configuración MCP para tus clientes IA")
     print("5. Probar conexión (Ver próximas entregas del Máster)")
-    print("6. Salir")
+    print("6. Ver registro de trazabilidad / logs (aulavirtual.log)")
+    print("7. Salir")
     print("=" * 65)
 
     while True:
-        opt = input("\nElige una opción (1-6): ").strip()
+        opt = input("\nElige una opción (1-7): ").strip()
         if opt == "1":
             install_requirements()
         elif opt == "2":
@@ -173,6 +181,8 @@ def interactive_menu():
         elif opt == "5":
             show_test_deadlines()
         elif opt == "6":
+            show_logs()
+        elif opt == "7":
             print("¡Listo! Que aproveches el cuatrimestre.")
             break
         else:
