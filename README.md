@@ -27,9 +27,9 @@ python3 setup.py
 
 El asistente interactivo te guiará con este menú:
 1. **Opción 1:** Instala las dependencias (`pip install -r requirements.txt`).
-2. **Opción 2:** Conecta tu cuenta del Aula Virtual UJI (te pide tu cookie de sesión de 10 segundos y te genera un token permanente que no caduca en todo el cuatrimestre).
+2. **Opción 2:** Conecta tu cuenta del Aula Virtual UJI (Login 1 clic en el navegador con la app oficial de Moodle; sin copiar cookies a mano).
 3. **Opción 3 (Opcional):** Conecta Google Tasks si quieres sincronización con tu móvil.
-4. **Opción 4:** Genera automáticamente la configuración lista para tu cliente de IA.
+4. **Opción 4:** Instala o fusiona automáticamente los MCPs en los clientes de IA que elijas (Claude, Antigravity, OpenCode, VS Code, Cursor).
 
 ---
 
@@ -123,7 +123,8 @@ En la carpeta `.vscode/mcp.json` de tu espacio de trabajo:
 ---
 
 ### 5. Cursor / Windsurf
-Ve a **Settings > Features > MCP**, pulsa **Add new MCP server**:
+El instalador (Opción 4) lo configura automáticamente en `~/.cursor/mcp.json`.
+Si prefieres hacerlo manualmente en la UI, ve a **Settings > Features > MCP**, pulsa **Add new MCP server**:
 * **Name:** `uji-aulavirtual`
 * **Type:** `command`
 * **Command:** `python RUTA_ABSOLUTA/aulavirtual_server.py`
@@ -153,3 +154,16 @@ python gtasks_server.py add "Estudiar examen parcial" --due 2026-11-20
 ## 🔒 Privacidad y Seguridad
 * **100% Local:** Ningún token ni contraseña sale de tu ordenador ni pasa por ningún servidor intermedio.
 * **Token persistente:** Utiliza la API oficial de Web Services de Moodle Mobile de la UJI, evitando tener que repetir el login de 2FA continuamente.
+
+
+---
+
+## 🔍 Modo Debug y Diagnóstico
+
+Si en algún momento necesitas ver las trazas de comunicación con el Aula Virtual o depurar una sincronización:
+```bash
+python setup.py --debug
+# o directamente en el servidor:
+python aulavirtual_server.py --debug --login
+```
+Esto habilitará el visor de logs en el menú y registrará las llamadas en `aulavirtual.log`.
