@@ -571,7 +571,73 @@ if mcp:
     mcp.tool()(sync_assignments_to_gtasks)
 
 
-def process_auth_input(raw_input: str) -> None:
+def register_protocol_handler() -> bool:
+    """Registra en Windows el protocolo moodlemobile:// para captura automatica en 1 clic (sin permisos de admin)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+
+        py_exe = sys.executable
+        script_path = str(Path(__file__).resolve())
+        cmd = f'"{py_exe}" "{script_path}" handle-url "%1"'
+
+        key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\moodlemobile")
+        winreg.SetValue(key, "", winreg.REG_SZ, "URL:Moodle Mobile Protocol")
+        winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
+        cmd_key = winreg.CreateKey(key, r"shell\open\command")
+        winreg.SetValue(cmd_key, "", winreg.REG_SZ, cmd)
+        winreg.CloseKey(cmd_key)
+        winreg.CloseKey(key)
+        return True
+    except Exception:
+        return False
+
+
+def interactive_login() -> None:
+    """Flujo de login automatico en 1 clic con navegador o fallback manual."""
+    print("=== Autenticacion con Aula Virtual UJI ===")
+    registered = register_protocol_handler()
+
+    if registered:
+        launch_url = f"{MOODLE_BASE_URL}/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport=12345"
+        print("\n[Metodo 1 - Automatico (1 clic)]")
+        print("1. Se abrira el Aula Virtual en tu navegador.")
+        print("2. En cuanto salte la ventanita emergente del navegador preguntando si quieres abrir la app o Python:")
+        print("   -> Pulsa 'ABRIR' (o 'PERMITIR').")
+        print("\nAbriendo navegador...")
+
+        import time
+        import webbrowser
+
+        start_time = time.time()
+        webbrowser.open(launch_url)
+        print("Esperando a que pulses 'Abrir' en el navegador...")
+
+        for _ in range(35):
+            if TOKEN_FILE.exists():
+                try:
+                    data = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+                    updated = data.get("updated_at")
+                    if updated:
+                        up_dt = datetime.datetime.fromisoformat(updated)
+                        if up_dt.timestamp() >= start_time - 3:
+                            name = data.get("user_info", {}).get("fullname", "tu usuario")
+                            print(f"\n[OK] ¡Sesion iniciada y token permanente guardado con exito para {name}!")
+                            return
+                except Exception:
+                    pass
+            time.sleep(1)
+
+        print("\n(No se detecto la confirmacion automatica en 35s. Pasando a metodo manual)")
+
+    print("\n[Metodo 2 - Manual sin F12]")
+    print(f"1. Abre este enlace en el navegador: {MOODLE_BASE_URL}/user/managetoken.php")
+    print("O bien:")
+    print("2. Pulsa F12 -> pestana Aplicacion -> Cookies -> copia 'MoodleSessionaulavirtualuji'")
+    user_input = input("\nPega tu cookie o token: ").strip()
+    if user_input:
+        process_auth_input(user_input)
     """Procesa de forma flexible cualquier tipo de entrada de autenticación:
     - Cookie MoodleSessionaulavirtualuji
     - Token de 32 caracteres directo
@@ -640,6 +706,8 @@ def _cli() -> None:
     sub = parser.add_subparsers(dest="cmd")
 
     sub.add_parser("login", help="Inicia sesión interactiva con tu cuenta de la UJI")
+    p_handle = sub.add_parser("handle-url", help="Maneja la URL moodlemobile:// lanzada por el navegador")
+    p_handle.add_argument("url", help="URL completa")
     p_cookie = sub.add_parser("from-cookie", help="Autentica pasando la cookie MoodleSessionaulavirtualuji")
     p_cookie.add_argument("cookie", help="Valor de la cookie de sesión")
 
@@ -660,13 +728,9 @@ def _cli() -> None:
     args = parser.parse_args()
 
     if args.cmd == "login":
-        print("=== Autenticacion con Aula Virtual UJI ===")
-        print("1. Abre https://aulavirtual.uji.es en tu navegador con tu sesion iniciada.")
-        print("2. Pulsa F12 -> pestana Aplicacion (Application o Almacenamiento) -> Cookies -> https://aulavirtual.uji.es")
-        print("3. Copia el valor de la cookie 'MoodleSessionaulavirtualuji' (o tu token si ya lo tienes).")
-        print("---------------------------------------------------------------------------------")
-        user_input = input("Pega la cookie (o token): ").strip()
-        process_auth_input(user_input)
+        interactive_login()
+    elif args.cmd == "handle-url":
+        process_auth_input(args.url)
     elif args.cmd == "from-cookie":
         process_auth_input(args.cookie)
     elif args.cmd == "set-token":
