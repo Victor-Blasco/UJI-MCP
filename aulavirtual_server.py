@@ -49,14 +49,24 @@ def get_workspace_root() -> Path:
     return curr
 
 
-KNOWN_COURSES: dict[str, dict[str, Any]] = {
-    "SJK001": {"id": 88961, "name": "Cyber-physical and Robotic Intelligent Systems", "pattern": "SJK001"},
-    "SJK002": {"id": 87272, "name": "Computer Vision", "pattern": "SJK002"},
-    "SJK003": {"id": 88148, "name": "Machine Learning", "pattern": "SJK003"},
-    "SJK004": {"id": 88380, "name": "Computational Intelligence", "pattern": "SJK004"},
-    "SJK005": {"id": 87220, "name": "Cloud Computing", "pattern": "SJK005"},
-    "SJK006": {"id": 88086, "name": "Big Data Analytics", "pattern": "SJK006"},
-}
+def _extract_course_meta(c: dict[str, Any]) -> tuple[str, str]:
+    """Extrae dinámicamente el código (ej. SJK006, EI1049) y nombre limpio de cualquier asignatura de la UJI."""
+    shortname = str(c.get("shortname", "")).strip()
+    fullname = str(c.get("fullname", "")).strip()
+
+    # En la UJI el shortname sigue el patrón CODIGO-2026-2027 o CODIGO-GRUPO-2026-2027
+    code_match = re.match(r"^([A-Za-z]{2,5}\d{3,4})", shortname)
+    if code_match:
+        code = code_match.group(1).upper()
+    else:
+        code = re.sub(r"-\d{4}[-/]\d{4}$", "", shortname) or str(c.get("id", "CURSO"))
+
+    # Limpiar el fullname quitando el prefijo de código y el sufijo (2026-2027)
+    clean_name = re.sub(r"\(\d{4}[-/]\d{4}\)\s*$", "", fullname).strip()
+    if " - " in clean_name:
+        clean_name = clean_name.split(" - ", 1)[1].strip()
+
+    return code, (clean_name or fullname or code)
 
 if _MCPServer:
     mcp = _MCPServer("uji-aulavirtual")
@@ -163,34 +173,44 @@ def call_moodle_api(wsfunction: str, **kwargs) -> Any:
 
 
 def resolve_course_id(course_id_or_code: str | int) -> int:
-    """Convierte un código como 'SJK006' o nombre en el courseid numérico de Moodle."""
+    """Convierte cualquier código (ej. 'SJK006', 'EI1049', 'MT1022'), nombre o ID en el courseid numérico de Moodle."""
     raw = str(course_id_or_code).strip()
     if raw.isdigit():
         return int(raw)
 
     upper = raw.upper()
-    for code, info in KNOWN_COURSES.items():
-        if code in upper:
-            return int(info["id"])
+    courses = list_courses()
 
-    try:
-        courses = list_courses()
-        for c in courses:
-            if upper in str(c.get("shortname", "")).upper() or upper in str(c.get("fullname", "")).upper():
-                return int(c["id"])
-    except Exception:
-        pass
+    # 1. Coincidencia exacta por código principal (priorizando asignatura base frente a subgrupos como -7)
+    exact_matches = [
+        c for c in courses
+        if str(c.get("code", "")).upper() == upper or str(c.get("shortname", "")).upper().startswith(f"{upper}-20")
+    ]
+    if exact_matches:
+        return int(exact_matches[0]["id"])
 
-    raise ValueError(f"No se pudo resolver la asignatura '{course_id_or_code}'. Usa el código SJKxxx o el ID numérico.")
+    # 2. Coincidencia parcial en shortname, código o nombre completo de cualquier asignatura UJI
+    for c in courses:
+        if (
+            upper in str(c.get("code", "")).upper()
+            or upper in str(c.get("shortname", "")).upper()
+            or upper in str(c.get("fullname", "")).upper()
+        ):
+            return int(c["id"])
+
+    raise ValueError(
+        f"No se encontró la asignatura '{course_id_or_code}' entre tus cursos matriculados del Aula Virtual."
+    )
 
 
 def _find_local_course_dir(course_code: str, default_name: str) -> Path:
-    """Localiza o sugiere la carpeta local para la asignatura."""
+    """Localiza o sugiere la carpeta local para cualquier asignatura de la UJI."""
     root = get_workspace_root()
     for item in root.glob(f"*{course_code}*"):
         if item.is_dir():
             return item
-    return root / f"{course_code} - {default_name}"
+    safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", default_name).strip()
+    return root / f"{course_code} - {safe_name}"
 
 
 def _clean_html(raw_html: str) -> str:
@@ -216,7 +236,7 @@ def get_user_profile() -> dict[str, Any]:
 
 
 def list_courses() -> list[dict[str, Any]]:
-    """Lista las asignaturas matriculadas del usuario con sus IDs, códigos y rutas locales."""
+    """Lista todas las asignaturas matriculadas del usuario en la UJI con sus IDs, códigos y rutas locales."""
     profile = get_user_profile()
     userid = profile["userid"]
     raw_courses = call_moodle_api("core_enrol_get_users_courses", userid=userid)
@@ -227,22 +247,17 @@ def list_courses() -> list[dict[str, Any]]:
         shortname = c.get("shortname", "")
         fullname = c.get("fullname", "")
 
-        matched_code = None
-        matched_name = fullname
-        for code, info in KNOWN_COURSES.items():
-            if str(cid) == str(info["id"]) or code in shortname.upper() or code in fullname.upper():
-                matched_code = code
-                matched_name = info["name"]
-                break
-
-        local_dir = _find_local_course_dir(matched_code, matched_name) if matched_code else None
+        code, clean_name = _extract_course_meta(c)
+        local_dir = _find_local_course_dir(code, clean_name)
 
         results.append({
             "id": cid,
             "shortname": shortname,
             "fullname": fullname,
-            "code": matched_code or shortname,
-            "local_directory": str(local_dir) if local_dir and local_dir.exists() else None,
+            "code": code,
+            "clean_name": clean_name,
+            "local_directory": str(local_dir) if local_dir.exists() else None,
+            "suggested_directory": str(local_dir),
             "url": f"{MOODLE_BASE_URL}/course/view.php?id={cid}",
         })
     return results
@@ -420,12 +435,16 @@ def download_course_file(
 
     target_root = get_workspace_root()
     if course_id_or_code:
-        for code, info in KNOWN_COURSES.items():
-            if code in course_id_or_code.upper():
-                found = _find_local_course_dir(code, info["name"])
-                if found.exists():
-                    target_root = found
-                break
+        try:
+            cid = resolve_course_id(course_id_or_code)
+            for c in list_courses():
+                if int(c["id"]) == cid:
+                    target_root = Path(c["suggested_directory"])
+                    break
+        except Exception:
+            code_clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", course_id_or_code).strip()
+            if code_clean:
+                target_root = _find_local_course_dir(code_clean, code_clean)
 
     subfolder = "fuentes"
     text_to_check = f"{section_name} {clean_filename}".lower()
