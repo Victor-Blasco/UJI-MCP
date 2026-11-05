@@ -147,7 +147,7 @@ def get_token() -> str:
             token = data.get("token") or data.get("wstoken")
             if token:
                 return token.strip()
-        except Exception as exc:
+        except (json.JSONDecodeError, OSError, KeyError) as exc:
             logger.warning("Error leyendo archivo de token %s: %s", TOKEN_FILE, exc)
 
     msg = (
@@ -296,7 +296,15 @@ def _clean_html(raw_html: str) -> str:
 
 @trace_tool
 def get_user_profile() -> dict[str, Any]:
-    """Obtiene el perfil y datos del usuario autenticado en el Aula Virtual."""
+    """Obtiene el perfil y datos del usuario autenticado en el Aula Virtual.
+
+    Returns:
+        dict[str, Any]: Información del perfil con claves username, fullname, userid,
+            sitename, siteurl y userpictureurl.
+
+    Raises:
+        RuntimeError: Si la llamada a la API de Moodle falla o el token es inválido.
+    """
     info = call_moodle_api("core_webservice_get_site_info")
     return {
         "username": info.get("username"),
@@ -310,7 +318,15 @@ def get_user_profile() -> dict[str, Any]:
 
 @trace_tool
 def list_courses() -> list[dict[str, Any]]:
-    """Lista todas las asignaturas matriculadas del usuario en la UJI con sus IDs, códigos y rutas locales."""
+    """Lista todas las asignaturas matriculadas del usuario en la UJI.
+
+    Returns:
+        list[dict[str, Any]]: Lista de asignaturas con id, shortname, fullname, code,
+            clean_name, local_directory y url directa de acceso.
+
+    Raises:
+        RuntimeError: Si no se pueden obtener las matriculaciones desde Moodle.
+    """
     profile = get_user_profile()
     userid = profile["userid"]
     raw_courses = call_moodle_api("core_enrol_get_users_courses", userid=userid)
@@ -339,7 +355,18 @@ def list_courses() -> list[dict[str, Any]]:
 
 @trace_tool
 def get_course_contents(course_id_or_code: str) -> list[dict[str, Any]]:
-    """Obtiene los temas, secciones, archivos (PDF, notebooks) y tareas de una asignatura."""
+    """Obtiene los temas, secciones, archivos (PDF, notebooks) y tareas de una asignatura.
+
+    Args:
+        course_id_or_code: Código de asignatura (ej. 'SJK006'), nombre o ID numérico.
+
+    Returns:
+        list[dict[str, Any]]: Secciones del curso con sus módulos y archivos listados.
+
+    Raises:
+        ValueError: Si la asignatura no se encuentra entre los cursos matriculados.
+        RuntimeError: Si la consulta a la API de Moodle falla.
+    """
     cid = resolve_course_id(course_id_or_code)
     sections = call_moodle_api("core_course_get_contents", courseid=cid)
 
@@ -377,7 +404,17 @@ def get_course_contents(course_id_or_code: str) -> list[dict[str, Any]]:
 
 @trace_tool
 def get_assignments(course_id_or_code: str = "") -> list[dict[str, Any]]:
-    """Lista las tareas y prácticas de una asignatura o de todas las asignaturas."""
+    """Lista las tareas y prácticas pendientes con sus fechas límite e instrucciones.
+
+    Args:
+        course_id_or_code: Código o ID de la asignatura (opcional; si se omite, consulta todas).
+
+    Returns:
+        list[dict[str, Any]]: Entregas ordenadas cronológicamente por duedate con metadatos.
+
+    Raises:
+        RuntimeError: Si la petición a la API mod_assign falla.
+    """
     kwargs: dict[str, Any] = {}
     if course_id_or_code:
         kwargs["courseids"] = [resolve_course_id(course_id_or_code)]
@@ -420,7 +457,18 @@ def get_assignments(course_id_or_code: str = "") -> list[dict[str, Any]]:
 
 @trace_tool
 def get_submission_status(assign_id: int) -> dict[str, Any]:
-    """Consulta si una tarea concreta ya ha sido entregada, calificada y el feedback recibido."""
+    """Consulta el estado de entrega y calificación de una tarea concreta.
+
+    Args:
+        assign_id: Identificador numérico de la tarea en Moodle.
+
+    Returns:
+        dict[str, Any]: Estado de la entrega ('submitted', 'new'), estado de corrección,
+            archivos adjuntos subidos, calificación y feedback del profesor.
+
+    Raises:
+        RuntimeError: Si no se puede consultar el estado de la entrega.
+    """
     res = call_moodle_api("mod_assign_get_submission_status", assignid=assign_id)
     last_attempt = res.get("lastattempt", {})
     sub = last_attempt.get("submission", {})
@@ -446,7 +494,17 @@ def get_submission_status(assign_id: int) -> dict[str, Any]:
 
 @trace_tool
 def get_upcoming_deadlines(days_ahead: int = 45) -> list[dict[str, Any]]:
-    """Obtiene los eventos y entregas del calendario del Aula Virtual ordenados por fecha."""
+    """Obtiene los eventos y entregas del calendario del Aula Virtual ordenados por fecha.
+
+    Args:
+        days_ahead: Número de días hacia adelante a consultar en el calendario (por defecto 45).
+
+    Returns:
+        list[dict[str, Any]]: Eventos y entregas ordenados cronológicamente.
+
+    Raises:
+        RuntimeError: Si la consulta al calendario de Moodle falla.
+    """
     now = int(datetime.datetime.now().timestamp())
     limit = now + (days_ahead * 86400)
 
@@ -476,7 +534,19 @@ def get_upcoming_deadlines(days_ahead: int = 45) -> list[dict[str, Any]]:
 
 @trace_tool
 def get_course_announcements(course_id_or_code: str, limit: int = 5) -> list[dict[str, Any]]:
-    """Lee los avisos y mensajes recientes publicados por los profesores en el foro de noticias."""
+    """Lee los avisos y mensajes recientes publicados por los profesores en el foro de noticias.
+
+    Args:
+        course_id_or_code: Código o ID de la asignatura (ej. 'SJK006').
+        limit: Límite de debates a recuperar por foro (por defecto 5).
+
+    Returns:
+        list[dict[str, Any]]: Mensajes y avisos con autor, asunto, contenido limpio y fecha.
+
+    Raises:
+        ValueError: Si la asignatura no se encuentra.
+        RuntimeError: Si falla la llamada a la API de foros de Moodle.
+    """
     cid = resolve_course_id(course_id_or_code)
     forums = call_moodle_api("mod_forum_get_forums_by_courses", courseids=[cid])
 
@@ -508,10 +578,62 @@ def download_course_file(
     course_id_or_code: str = "",
     section_name: str = "",
 ) -> dict[str, str]:
-    """Descarga un archivo organizándolo entre 01_Teoria, 02_Laboratorio o fuentes."""
-    _validate_moodle_url(file_url)
+    """Descarga un archivo organizándolo entre 01_Teoria, 02_Laboratorio o fuentes.
+
+    Soporta descarga directa con token de Moodle y exportación automática a PDF/IPYNB
+    desde Google Slides, Google Docs y Google Drive.
+
+    Args:
+        file_url: URL remota del archivo o recurso.
+        filename: Nombre sugerido para el archivo local.
+        course_id_or_code: Código de la asignatura para ubicar su carpeta destino.
+        section_name: Nombre de la sección para inferir la subcarpeta adecuada.
+
+    Returns:
+        dict[str, str]: Diccionario con status ('success'), saved_path, filesize_bytes y subfolder.
+
+    Raises:
+        ValueError: Si la ruta de destino es insegura o intenta Path Traversal.
+        requests.RequestException: Si falla la descarga por problemas de red o HTTP.
+    """
     clean_filename = _sanitize_filename(filename)
-    token = get_token()
+    token = None
+    download_url = file_url
+
+    # Detección inteligente de recursos de Google (Slides, Drive, Colab, Docs)
+    m_slides = re.search(r"docs\.google\.com/presentation/d/([a-zA-Z0-9_-]+)", file_url)
+    m_drive = re.search(r"(?:drive\.google\.com/file/d/|colab\.research\.google\.com/drive/)([a-zA-Z0-9_-]+)", file_url)
+    m_docs = re.search(r"docs\.google\.com/document/d/([a-zA-Z0-9_-]+)", file_url)
+
+    if m_slides:
+        download_url = f"https://docs.google.com/presentation/d/{m_slides.group(1)}/export/pdf"
+        clean_name = re.sub(r"\(?\s*Google Slides\s*\)?", "", clean_filename, flags=re.IGNORECASE).strip()
+        clean_name = re.sub(r"\s*\)+$", "", clean_name).strip()
+        if clean_name.count("(") > clean_name.count(")"):
+            clean_name += ")"
+        if not clean_name.lower().endswith(".pdf"):
+            clean_name += ".pdf"
+        clean_filename = _sanitize_filename(clean_name)
+    elif m_drive:
+        download_url = f"https://drive.google.com/uc?export=download&id={m_drive.group(1)}"
+        if "colab" in file_url or "notebook" in clean_filename.lower():
+            if not clean_filename.lower().endswith(".ipynb"):
+                clean_filename += ".ipynb"
+        clean_filename = _sanitize_filename(clean_filename)
+    elif m_docs:
+        download_url = f"https://docs.google.com/document/d/{m_docs.group(1)}/export?format=pdf"
+        if not clean_filename.lower().endswith(".pdf"):
+            clean_filename += ".pdf"
+        clean_filename = _sanitize_filename(clean_filename)
+    else:
+        parsed = urllib.parse.urlparse(file_url)
+        expected_host = urllib.parse.urlparse(MOODLE_BASE_URL).netloc.lower()
+        if parsed.netloc.lower() == expected_host:
+            token = get_token()
+            sep = "&" if "?" in file_url else "?"
+            download_url = f"{file_url}{sep}token={token}"
+        else:
+            download_url = file_url
 
     target_root = get_workspace_root()
     if course_id_or_code:
@@ -521,16 +643,16 @@ def download_course_file(
                 if int(c["id"]) == cid:
                     target_root = Path(c["suggested_directory"])
                     break
-        except Exception:
+        except ValueError:
             code_clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", course_id_or_code).strip()
             if code_clean:
                 target_root = _find_local_course_dir(code_clean, code_clean)
 
     subfolder = "fuentes"
-    text_to_check = f"{section_name} {clean_filename}".lower()
+    text_to_check = f"{section_name} {clean_filename} {filename}".lower()
     if any(k in text_to_check for k in ["lab", "práct", "practic", "sesión", "sesion", "taller", "tarea", "entrega", "notebook", ".ipynb"]):
         subfolder = "02_Laboratorio"
-    elif any(k in text_to_check for k in ["teor", "tema", "lección", "leccion", "capítulo", "slide", "diapositiv", "transparencia", "unidad"]):
+    elif any(k in text_to_check for k in ["teor", "tema", "lección", "leccion", "capítulo", "slide", "diapositiv", "transparencia", "unidad", "definition", "architecture"]):
         subfolder = "01_Teoria"
 
     target_dir = (target_root / subfolder).resolve()
@@ -540,14 +662,7 @@ def download_course_file(
     if not target_path.is_relative_to(target_dir):
         raise ValueError("Ruta de destino fuera del directorio permitido.")
 
-    sep = "&" if "?" in file_url else "?"
-    download_url = f"{file_url}{sep}token={token}"
-
-    resp = requests.get(download_url, stream=True, timeout=60, allow_redirects=False)
-    if resp.status_code in (301, 302, 303, 307, 308):
-        redir_url = resp.headers.get("Location", "")
-        _validate_moodle_url(redir_url)
-        resp = requests.get(redir_url, stream=True, timeout=60, allow_redirects=False)
+    resp = requests.get(download_url, stream=True, timeout=60, allow_redirects=True)
     resp.raise_for_status()
 
     with open(target_path, "wb") as f:
@@ -569,7 +684,19 @@ def sync_assignments_to_gtasks(
     tasklist_title: str = "Aula Virtual UJI",
     days_ahead: int = 90,
 ) -> dict[str, Any]:
-    """Sincroniza automáticamente las entregas pendientes del Aula Virtual con Google Tasks."""
+    """Sincroniza automáticamente las entregas pendientes del Aula Virtual con Google Tasks.
+
+    Args:
+        tasklist_title: Título de la lista en Google Tasks (por defecto 'Aula Virtual UJI').
+        days_ahead: Días futuros a considerar para la sincronización (por defecto 90).
+
+    Returns:
+        dict[str, Any]: Resumen con tasklist_id, tasklist_title, created_count,
+            skipped_existing_or_submitted y created_tasks.
+
+    Raises:
+        RuntimeError: Si falta gtasks_server.py o falla la comunicación con Google Tasks.
+    """
     try:
         sys.path.insert(0, str(BASE_DIR))
         from gtasks_server import create_task, create_tasklist, list_tasklists, list_tasks
@@ -614,8 +741,8 @@ def sync_assignments_to_gtasks(
             if status_info.get("status") == "submitted":
                 skipped_count += 1
                 continue
-        except Exception:
-            pass
+        except (RuntimeError, requests.RequestException, KeyError) as exc:
+            logger.debug("No se pudo verificar estado de entrega %s: %s", a.get("assignment_id"), exc)
 
         due_date_str = datetime.datetime.fromtimestamp(due_ts).strftime("%Y-%m-%d")
         notes = f"Aula Virtual: {a.get('url')}\n\nInstrucciones:\n{a.get('instructions', '')[:400]}"
@@ -641,6 +768,179 @@ def sync_assignments_to_gtasks(
     }
 
 
+def _ts(value: Any) -> str | None:
+    """Convierte un timestamp Unix de Moodle a ISO 8601 (o None)."""
+    return datetime.datetime.fromtimestamp(int(value)).isoformat() if value else None
+
+
+@trace_tool
+def get_grades(course_id_or_code: str = "") -> list[dict[str, Any]]:
+    """Consulta las calificaciones del libro de calificaciones de Moodle.
+
+    Args:
+        course_id_or_code: Código o ID de la asignatura. Si se omite, devuelve un resumen
+            de la nota global de todos los cursos matriculados con carpeta local.
+
+    Returns:
+        list[dict[str, Any]]: Desglose detallado de notas, ponderaciones, porcentajes y feedback.
+
+    Raises:
+        RuntimeError: Si la consulta a la API de calificaciones falla.
+    """
+    userid = get_user_profile()["userid"]
+    if not course_id_or_code:
+        res = call_moodle_api("gradereport_overview_get_course_grades", userid=userid)
+        local = {int(c["id"]): c["code"] for c in list_courses() if c.get("local_directory")}
+        return [
+            {
+                "course": local[int(g["courseid"])],
+                "grade": g.get("grade"),
+                "rawgrade": g.get("rawgrade"),
+            }
+            for g in res.get("grades", [])
+            if int(g["courseid"]) in local
+        ]
+
+    cid = resolve_course_id(course_id_or_code)
+    res = call_moodle_api("gradereport_user_get_grade_items", courseid=cid, userid=userid)
+    items = []
+    for ug in res.get("usergrades", []):
+        for it in ug.get("gradeitems", []):
+            items.append({
+                "item": it.get("itemname") or ("Total curso" if it.get("itemtype") == "course" else it.get("itemtype")),
+                "module": it.get("itemmodule"),
+                "grade": _clean_html(it.get("gradeformatted") or ""),
+                "grade_raw": it.get("graderaw"),
+                "grade_max": it.get("grademax"),
+                "percentage": it.get("percentageformatted"),
+                "weight": it.get("weightformatted"),
+                "feedback": _clean_html(it.get("feedback", "")),
+                "graded_at": _ts(it.get("gradedategraded")),
+            })
+    return items
+
+
+@trace_tool
+def check_new_materials(course_id_or_code: str = "", download: bool = False) -> list[dict[str, Any]]:
+    """Detecta archivos del Aula Virtual que faltan o están desactualizados en las carpetas locales.
+
+    Args:
+        course_id_or_code: Código o ID de la asignatura (opcional).
+        download: Si es True, descarga automáticamente los archivos nuevos o modificados.
+
+    Returns:
+        list[dict[str, Any]]: Lista de archivos con estado ('new', 'updated'), fecha de Moodle y ruta.
+
+    Raises:
+        RuntimeError: Si falla la obtención de contenidos del curso.
+    """
+    courses = list_courses()
+    if course_id_or_code:
+        cid = resolve_course_id(course_id_or_code)
+        courses = [c for c in courses if int(c["id"]) == cid]
+    else:
+        courses = [c for c in courses if c.get("local_directory")]
+
+    found = []
+    for c in courses:
+        local_root = Path(c["suggested_directory"])
+        for s in get_course_contents(str(c["id"])):
+            for m in s["modules"]:
+                modname = m.get("modname")
+                if modname not in ("resource", "folder", "assign", "url"):
+                    continue
+                for f in m["files"]:
+                    name = f.get("filename")
+                    furl = f.get("fileurl")
+                    if not name or not furl:
+                        continue
+                    if modname == "url":
+                        if not any(k in furl for k in ["docs.google.com/presentation", "colab.research.google.com", "drive.google.com", "docs.google.com/document", ".pdf"]):
+                            continue
+
+                    check_names = [name]
+                    if "docs.google.com/presentation" in furl:
+                        clean = re.sub(r"\(?\s*Google Slides\s*\)?", "", name, flags=re.IGNORECASE).strip()
+                        clean = re.sub(r"\s*\)+$", "", clean).strip()
+                        if clean.count("(") > clean.count(")"):
+                            clean += ")"
+                        if not clean.lower().endswith(".pdf"):
+                            clean += ".pdf"
+                        check_names.extend([clean, clean[:-4]])
+                    elif "colab" in furl:
+                        if not name.lower().endswith(".ipynb"):
+                            check_names.append(name + ".ipynb")
+
+                    local = None
+                    if local_root.exists():
+                        for cn in check_names:
+                            local = next(local_root.rglob(cn), None)
+                            if local:
+                                break
+
+                    if local is None:
+                        state = "new"
+                    elif (f.get("timemodified") or 0) > local.stat().st_mtime:
+                        state = "updated"
+                    else:
+                        continue
+                    entry = {
+                        "course": c["code"],
+                        "section": s["name"],
+                        "module": m["name"],
+                        "filename": name,
+                        "state": state,
+                        "moodle_modified": _ts(f.get("timemodified")),
+                        "fileurl": furl,
+                        "local_path": str(local) if local else None,
+                    }
+                    if download:
+                        try:
+                            entry["download"] = download_course_file(furl, name, c["code"], s["name"] or "")
+                        except (requests.RequestException, ValueError, OSError) as exc:
+                            entry["download"] = {"status": "error", "error": str(exc)}
+                    found.append(entry)
+    return found
+
+
+@trace_tool
+def get_notifications(unread_only: bool = True, limit: int = 20) -> dict[str, Any]:
+    """Obtiene las notificaciones de la campanita de Moodle (vencimientos, avisos, notas).
+
+    Args:
+        unread_only: Si es True, devuelve solo las no leídas; si False, incluye leídas.
+        limit: Límite de notificaciones a recuperar (por defecto 20).
+
+    Returns:
+        dict[str, Any]]: Total de no leídas y lista de notificaciones con fecha y mensaje.
+
+    Raises:
+        RuntimeError: Si la llamada a la API de notificaciones falla.
+    """
+    userid = get_user_profile()["userid"]
+    res = call_moodle_api(
+        "message_popup_get_popup_notifications",
+        useridto=userid,
+        newestfirst=1,
+        limit=limit,
+        offset=0,
+    )
+    out = []
+    for n in res.get("notifications", []):
+        if unread_only and n.get("read"):
+            continue
+        out.append({
+            "id": n.get("id"),
+            "subject": n.get("subject"),
+            "message": _clean_html(n.get("smallmessage") or n.get("fullmessage", "")),
+            "component": n.get("component"),
+            "url": n.get("contexturl"),
+            "date": _ts(n.get("timecreated")),
+            "read": bool(n.get("read")),
+        })
+    return {"unread_count": res.get("unreadcount"), "notifications": out}
+
+
 if mcp:
     mcp.tool()(get_user_profile)
     mcp.tool()(list_courses)
@@ -651,6 +951,9 @@ if mcp:
     mcp.tool()(get_course_announcements)
     mcp.tool()(download_course_file)
     mcp.tool()(sync_assignments_to_gtasks)
+    mcp.tool()(get_grades)
+    mcp.tool()(check_new_materials)
+    mcp.tool()(get_notifications)
 
 
 def register_protocol_handler() -> bool:
@@ -675,7 +978,7 @@ def register_protocol_handler() -> bool:
         winreg.CloseKey(key)
         logger.info("Protocolo moodlemobile:// registrado en HKCU -> %s", cmd)
         return True
-    except Exception as exc:
+    except (OSError, ImportError) as exc:
         logger.error("Error registrando protocolo moodlemobile://: %s", exc)
         return False
 
@@ -700,7 +1003,7 @@ def _start_local_login_bridge(launch_url: str, start_time: float) -> tuple[http.
                             authenticated = True
                             ui = data.get("user_info", {})
                             user_str = f"{ui.get('fullname', '')} ({ui.get('username', '')})"
-                    except Exception:
+                    except (json.JSONDecodeError, OSError, ValueError, KeyError):
                         pass
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -717,7 +1020,7 @@ def _start_local_login_bridge(launch_url: str, start_time: float) -> tuple[http.
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.end_headers()
                     self.wfile.write(json.dumps({"ok": True}).encode("utf-8"))
-                except Exception as exc:
+                except (RuntimeError, requests.RequestException, ValueError) as exc:
                     logger.error("Error en /submit manual desde puente web: %s", exc)
                     self.send_response(400)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -831,7 +1134,7 @@ def interactive_login() -> None:
                             time.sleep(1.5)
                             server.shutdown()
                             return
-                except Exception:
+                except (json.JSONDecodeError, OSError, ValueError):
                     pass
             time.sleep(1)
     except KeyboardInterrupt:
@@ -866,7 +1169,7 @@ def process_auth_input(raw_input: str) -> None:
             try:
                 _verify_and_save_token(cand)
                 return
-            except Exception as exc:
+            except (RuntimeError, requests.RequestException, ValueError) as exc:
                 last_err = exc
                 logger.warning("Candidato de token falló validación: %s", exc)
         raise RuntimeError(f"No se pudo validar el token recibido de moodlemobile://: {last_err}")
@@ -876,7 +1179,7 @@ def process_auth_input(raw_input: str) -> None:
         try:
             _verify_and_save_token(raw_input)
             return
-        except Exception as exc:
+        except (RuntimeError, requests.RequestException, ValueError) as exc:
             logger.info("No es un wstoken directo (%s). Probando como cookie de sesión...", exc)
 
     login_flow_from_cookie(raw_input)
@@ -952,6 +1255,17 @@ def _cli() -> None:
     p_sync = sub.add_parser("sync", help="Sincroniza tareas del Aula Virtual con Google Tasks")
     p_sync.add_argument("--list-title", default="Aula Virtual UJI")
 
+    p_grades = sub.add_parser("grades", help="Notas del libro de calificaciones")
+    p_grades.add_argument("--course", default="", help="Código de asignatura (ej. SJK004)")
+
+    p_new = sub.add_parser("new-materials", help="Archivos nuevos o actualizados en el Aula Virtual")
+    p_new.add_argument("--course", default="", help="Código de asignatura (ej. SJK004)")
+    p_new.add_argument("--download", action="store_true", help="Descargar los archivos detectados")
+
+    p_notif = sub.add_parser("notifications", help="Notificaciones de la campana de Moodle")
+    p_notif.add_argument("--all", action="store_true", help="Incluir también las leídas")
+    p_notif.add_argument("--limit", type=int, default=20)
+
     p_logs = sub.add_parser("logs", help="Muestra el registro de trazabilidad (aulavirtual.log)")
     p_logs.add_argument("-n", "--lines", type=int, default=50, help="Número de líneas a mostrar")
 
@@ -967,7 +1281,7 @@ def _cli() -> None:
         logger.info("handle-url invocado desde Windows con URL de longitud %d", len(args.url))
         try:
             process_auth_input(args.url)
-        except Exception as exc:
+        except (RuntimeError, requests.RequestException, ValueError) as exc:
             logger.error("Fallo crítico en handle-url: %s\n%s", exc, traceback.format_exc())
             raise
     elif args.cmd == "from-cookie":
@@ -984,6 +1298,12 @@ def _cli() -> None:
         print(json.dumps(get_upcoming_deadlines(), indent=2, ensure_ascii=False))
     elif args.cmd == "sync":
         print(json.dumps(sync_assignments_to_gtasks(args.list_title), indent=2, ensure_ascii=False))
+    elif args.cmd == "grades":
+        print(json.dumps(get_grades(args.course), indent=2, ensure_ascii=False))
+    elif args.cmd == "new-materials":
+        print(json.dumps(check_new_materials(args.course, args.download), indent=2, ensure_ascii=False))
+    elif args.cmd == "notifications":
+        print(json.dumps(get_notifications(not args.all, args.limit), indent=2, ensure_ascii=False))
     elif args.cmd == "logs":
         show_logs(args.lines)
     else:

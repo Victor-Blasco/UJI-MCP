@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Asistente de configuración rápida e instalación del Pack MCP Aula Virtual UJI & Google Tasks.
+"""Configurador y Asistente de Instalación para el Pack MCP Aula Virtual UJI & Google Tasks.
 
-Soporta instalación directa (merge seguro) y generación de plantillas para:
-1. Claude Desktop
-2. Antigravity (Agy)
-3. OpenCode
-4. Codex / VS Code (Roo Code, Cline, GitHub Copilot)
-5. Cursor
+Guía interactiva paso a paso para configurar dependencias, vincular cuentas
+y generar/fusionar configuraciones para Claude Desktop, Antigravity, OpenCode,
+Codex / VS Code y Cursor.
+Cumple estrictamente con las directrices de AGENTS.md (silencio por defecto,
+menús persistentes, merge seguro y gestión idiomática de excepciones).
 """
 
 from __future__ import annotations
@@ -21,78 +20,69 @@ from pathlib import Path
 from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent
-PYTHON_EXE = sys.executable or "python"
 AULAVIRTUAL_SCRIPT = BASE_DIR / "aulavirtual_server.py"
 GTASKS_SCRIPT = BASE_DIR / "gtasks_server.py"
+PYTHON_EXE = sys.executable
 
 DEBUG_MODE = False
 
 
-def format_path(p: Path) -> str:
-    """Devuelve la ruta en formato estándar con barras inclinadas."""
-    return str(p.resolve()).replace("\\", "/")
+def _get_server_entries(use_placeholders: bool = False) -> dict[str, Any]:
+    """Genera las entradas JSON para uji-aulavirtual y google-tasks.
 
+    Args:
+        use_placeholders: Si es True, utiliza '<RUTA_A_UJI_MCP>' en vez de rutas absolutas.
 
-def _get_server_entries(use_placeholders: bool = False) -> dict[str, dict[str, Any]]:
-    """Devuelve las definiciones de servidores MCP con rutas reales o placeholders."""
+    Returns:
+        dict[str, Any]: Diccionario con la definición de los dos servidores MCP.
+    """
     if use_placeholders:
-        py_path = "python"
-        aula_path = "<RUTA_A_UJI_MCP>/aulavirtual_server.py"
-        tasks_path = "<RUTA_A_UJI_MCP>/gtasks_server.py"
+        py_cmd = "python"
+        av_path = "<RUTA_A_UJI_MCP>/aulavirtual_server.py"
+        gt_path = "<RUTA_A_UJI_MCP>/gtasks_server.py"
     else:
-        py_path = format_path(Path(PYTHON_EXE))
-        aula_path = format_path(AULAVIRTUAL_SCRIPT)
-        tasks_path = format_path(GTASKS_SCRIPT)
+        py_cmd = PYTHON_EXE.replace("\\", "/")
+        av_path = str(AULAVIRTUAL_SCRIPT.resolve()).replace("\\", "/")
+        gt_path = str(GTASKS_SCRIPT.resolve()).replace("\\", "/")
 
     return {
         "uji-aulavirtual": {
-            "command": py_path,
-            "args": [aula_path],
+            "command": py_cmd,
+            "args": [av_path],
         },
         "google-tasks": {
-            "command": py_path,
-            "args": [tasks_path],
+            "command": py_cmd,
+            "args": [gt_path],
         },
-    }
-
-
-def generate_configs(use_placeholders: bool = False) -> dict[str, dict[str, Any]]:
-    """Genera los diccionarios de configuración MCP para cada cliente."""
-    servers = _get_server_entries(use_placeholders=use_placeholders)
-
-    claude_agy_cursor = {"mcpServers": dict(servers)}
-    opencode = {
-        "$schema": "https://opencode.ai/config.json",
-        "mcp": {"servers": dict(servers)},
-    }
-    vscode_cline = {"servers": dict(servers)}
-
-    return {
-        "claude": claude_agy_cursor,
-        "agy": claude_agy_cursor,
-        "opencode": opencode,
-        "vscode": vscode_cline,
-        "cursor": claude_agy_cursor,
     }
 
 
 def _get_client_target_paths() -> dict[str, tuple[str, Path, Path]]:
-    """Devuelve para cada cliente: (Nombre legible, Ruta real del cliente, Ruta en configs/)."""
+    """Devuelve las rutas reales y de plantilla para cada cliente de IA soportado.
+
+    Returns:
+        dict[str, tuple[str, Path, Path]]: Mapeo de clave a tupla con
+            (Nombre legible, Ruta de configuración en el sistema, Ruta de plantilla local).
+    """
     home = Path.home()
     cfg_dir = BASE_DIR / "configs"
 
     if sys.platform == "win32":
         appdata = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
         claude_path = appdata / "Claude" / "claude_desktop_config.json"
+        vscode_path = appdata / "Code" / "User" / "mcp.json"
+        cursor_path = home / ".cursor" / "mcp.json"
     elif sys.platform == "darwin":
         claude_path = home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        vscode_path = home / "Library" / "Application Support" / "Code" / "User" / "mcp.json"
+        cursor_path = home / ".cursor" / "mcp.json"
     else:
         claude_path = home / ".config" / "Claude" / "claude_desktop_config.json"
+        vscode_path = home / ".config" / "Code" / "User" / "mcp.json"
+        cursor_path = home / ".cursor" / "mcp.json"
 
     agy_path = home / ".gemini" / "config" / "mcp_config.json"
     opencode_path = home / ".config" / "opencode" / "opencode.json"
-    vscode_path = BASE_DIR.parent / ".vscode" / "mcp.json" if (BASE_DIR.parent / ".vscode").exists() else BASE_DIR / ".vscode" / "mcp.json"
-    cursor_path = home / ".cursor" / "mcp.json"
 
     return {
         "claude": ("Claude Desktop", claude_path, cfg_dir / "claude_desktop_config.json"),
@@ -104,14 +94,23 @@ def _get_client_target_paths() -> dict[str, tuple[str, Path, Path]]:
 
 
 def _merge_and_write_config(client_key: str, target_path: Path, servers: dict[str, Any]) -> None:
-    """Fusiona los MCPs en el archivo de configuración del cliente sin borrar otros servidores existentes."""
+    """Fusiona los servidores MCP en el archivo de configuración del cliente respetando claves previas.
+
+    Args:
+        client_key: Identificador del cliente ('claude', 'agy', 'opencode', 'vscode', 'cursor').
+        target_path: Ruta al archivo JSON de configuración.
+        servers: Diccionario con los servidores MCP a registrar.
+
+    Raises:
+        OSError: Si falla la creación de carpetas o la escritura en disco.
+    """
     existing: dict[str, Any] = {}
     if target_path.exists():
         try:
             raw = target_path.read_text(encoding="utf-8").strip()
             if raw:
                 existing = json.loads(raw)
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             existing = {}
 
     if client_key == "opencode":
@@ -131,7 +130,11 @@ def _merge_and_write_config(client_key: str, target_path: Path, servers: dict[st
 
 
 def install_selected_clients(selected_keys: list[str]) -> None:
-    """Instala (haciendo merge seguro) los MCPs únicamente en los clientes seleccionados."""
+    """Instala (haciendo merge seguro) los MCPs únicamente en los clientes seleccionados.
+
+    Args:
+        selected_keys: Lista de claves de clientes seleccionados por el usuario.
+    """
     servers = _get_server_entries(use_placeholders=False)
     targets = _get_client_target_paths()
 
@@ -143,13 +146,13 @@ def install_selected_clients(selected_keys: list[str]) -> None:
         try:
             _merge_and_write_config(key, real_path, servers)
             print(f"  [OK] {label:<18} -> Configurado en: {real_path}")
-        except Exception as exc:
+        except OSError as exc:
             print(f"  [!]  {label:<18} -> Error al configurar en {real_path}: {exc}")
             print(f"       Puedes copiar la plantilla de: {local_template_path}")
 
 
 def choose_and_install_clients_menu() -> None:
-    """Submenú interactivo para elegir en qué clientes instalar los MCPs (permite selección múltiple)."""
+    """Muestra el submenú interactivo para elegir en qué clientes de IA instalar los MCPs."""
     targets = _get_client_target_paths()
     option_map = {
         "1": "claude",
@@ -190,6 +193,15 @@ def choose_and_install_clients_menu() -> None:
 
 
 def _subproc_cmd(script: Path, *extra_args: str) -> list[str]:
+    """Construye el comando para subprocesos propagando el flag --debug si está activo.
+
+    Args:
+        script: Ruta al script Python a ejecutar.
+        extra_args: Argumentos adicionales de línea de comandos.
+
+    Returns:
+        list[str]: Lista de argumentos lista para subprocess.check_call.
+    """
     cmd = [PYTHON_EXE, str(script)]
     if DEBUG_MODE:
         cmd.append("--debug")
@@ -198,7 +210,7 @@ def _subproc_cmd(script: Path, *extra_args: str) -> list[str]:
 
 
 def install_requirements() -> None:
-    """Instala las dependencias con pip."""
+    """Instala las dependencias necesarias mediante pip."""
     req_file = BASE_DIR / "requirements.txt"
     print("\nInstalando dependencias necesarias...")
     subprocess.check_call([PYTHON_EXE, "-m", "pip", "install", "-r", str(req_file)])
@@ -206,12 +218,12 @@ def install_requirements() -> None:
 
 
 def connect_aulavirtual() -> None:
-    """Ejecuta el asistente de conexión de Aula Virtual."""
+    """Ejecuta el asistente de inicio de sesión del Aula Virtual UJI."""
     subprocess.check_call(_subproc_cmd(AULAVIRTUAL_SCRIPT, "login"))
 
 
 def connect_tasks() -> None:
-    """Ejecuta el asistente de conexión de Google Tasks."""
+    """Ejecuta el flujo de autorización OAuth para Google Tasks."""
     creds_file = BASE_DIR / "credentials.json"
     if not creds_file.exists():
         print(f"\n[AVISO] No se encontró 'credentials.json' en {BASE_DIR}")
@@ -222,28 +234,28 @@ def connect_tasks() -> None:
             return
     try:
         subprocess.check_call([PYTHON_EXE, str(GTASKS_SCRIPT), "auth"])
-    except Exception as e:
-        print(f"Error conectando Google Tasks: {e}")
+    except (subprocess.CalledProcessError, OSError) as exc:
+        print(f"Error conectando Google Tasks: {exc}")
 
 
 def show_test_deadlines() -> None:
-    """Muestra las entregas detectadas para verificar el funcionamiento."""
+    """Consulta y muestra las próximas entregas detectadas para verificar la conexión."""
     try:
         subprocess.check_call(_subproc_cmd(AULAVIRTUAL_SCRIPT, "deadlines"))
-    except Exception as e:
-        print(f"Error consultando entregas: {e}")
+    except (subprocess.CalledProcessError, OSError) as exc:
+        print(f"Error consultando entregas: {exc}")
 
 
 def show_logs() -> None:
-    """Muestra el registro de trazabilidad."""
+    """Muestra las últimas líneas del archivo de trazabilidad aulavirtual.log."""
     try:
         subprocess.check_call(_subproc_cmd(AULAVIRTUAL_SCRIPT, "logs", "-n", "60"))
-    except Exception as e:
-        print(f"Error leyendo logs: {e}")
+    except (subprocess.CalledProcessError, OSError) as exc:
+        print(f"Error leyendo logs: {exc}")
 
 
 def print_main_menu() -> None:
-    """Imprime las opciones disponibles del menú principal."""
+    """Imprime el menú de opciones disponible con el estado actual."""
     debug_tag = " [MODO DEBUG ACTIVO]" if DEBUG_MODE else ""
     print("\n" + "=" * 65)
     print(f"   Pack MCP Aula Virtual UJI & Google Tasks{debug_tag}")
@@ -262,6 +274,7 @@ def print_main_menu() -> None:
 
 
 def interactive_menu() -> None:
+    """Bucle interactivo principal persistente hasta salida explícita con '0'."""
     while True:
         print_main_menu()
         prompt = "Elige una opción (0-6): " if DEBUG_MODE else "Elige una opción (0-5): "

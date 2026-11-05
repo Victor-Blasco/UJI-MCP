@@ -3,6 +3,7 @@
 
 100% Portable - Funciona en Windows, macOS y Linux.
 Compatible con Claude Desktop, Antigravity, OpenCode, Codex / VS Code, Cursor y Windsurf.
+Cumple estrictamente con las directrices de AGENTS.md (tipado moderno, docstrings Google, gestión de recursos).
 """
 
 from __future__ import annotations
@@ -44,7 +45,14 @@ else:
 
 
 def _normalize_due(due: str | None) -> str | None:
-    """Asegura el formato RFC3339 exigido por la API de Google Tasks."""
+    """Normaliza la fecha de vencimiento al formato RFC3339 exigido por Google Tasks.
+
+    Args:
+        due: Fecha en formato YYYY-MM-DD o RFC3339 completo.
+
+    Returns:
+        str | None: Cadena normalizada con sufijo T00:00:00.000Z o None si due está vacío.
+    """
     if not due:
         return None
     due = due.strip()
@@ -53,17 +61,35 @@ def _normalize_due(due: str | None) -> str | None:
     return due
 
 
-def get_tasks_service(interactive: bool = False):
-    """Autentica y devuelve el cliente oficial de Google Tasks."""
+def get_tasks_service(interactive: bool = False) -> Any:
+    """Autentica con OAuth 2.0 y devuelve el recurso cliente de la API de Google Tasks.
+
+    Args:
+        interactive: Si es True, permite abrir el navegador para login si no hay token.
+
+    Returns:
+        Resource: Cliente de Google Tasks de googleapiclient.discovery.build.
+
+    Raises:
+        FileNotFoundError: Si no existe el archivo credentials.json necesario para autenticar.
+        RuntimeError: Si el flujo de autorización OAuth falla.
+    """
     creds = None
     if DEFAULT_TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(str(DEFAULT_TOKEN_PATH), SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(str(DEFAULT_TOKEN_PATH), SCOPES)
+        except (json.JSONDecodeError, ValueError, OSError):
+            creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            DEFAULT_TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
-        else:
+            try:
+                creds.refresh(Request())
+                DEFAULT_TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
+            except Exception:
+                creds = None
+
+        if not creds or not creds.valid:
             if not DEFAULT_CREDS_PATH.exists():
                 raise FileNotFoundError(
                     f"No se encontró el archivo de credenciales en: {DEFAULT_CREDS_PATH}\n"
@@ -80,7 +106,14 @@ def get_tasks_service(interactive: bool = False):
 
 
 def list_tasklists() -> list[dict[str, Any]]:
-    """Lista todas las listas de tareas del usuario."""
+    """Lista todas las listas de tareas del usuario autenticado en Google Tasks.
+
+    Returns:
+        list[dict[str, Any]]: Lista de diccionarios con claves 'id', 'title' y 'updated'.
+
+    Raises:
+        RuntimeError: Si la llamada a la API de Google falla.
+    """
     service = get_tasks_service()
     res = service.tasklists().list(maxResults=100).execute()
     return [
@@ -90,9 +123,23 @@ def list_tasklists() -> list[dict[str, Any]]:
 
 
 def create_tasklist(title: str) -> dict[str, Any]:
-    """Crea una nueva lista de tareas en Google Tasks."""
+    """Crea una nueva lista de tareas en la cuenta de Google Tasks.
+
+    Args:
+        title: Título legible para la nueva lista de tareas (ej. 'Aula Virtual UJI').
+
+    Returns:
+        dict[str, Any]: Metadatos de la lista creada (incluyendo su 'id').
+
+    Raises:
+        ValueError: Si el título está vacío.
+        RuntimeError: Si la API de Google devuelve un error.
+    """
+    clean_title = title.strip()
+    if not clean_title:
+        raise ValueError("El título de la lista de tareas no puede estar vacío.")
     service = get_tasks_service()
-    return service.tasklists().insert(body={"title": title}).execute()
+    return service.tasklists().insert(body={"title": clean_title}).execute()
 
 
 def list_tasks(
@@ -100,7 +147,19 @@ def list_tasks(
     show_completed: bool = True,
     max_results: int = 100,
 ) -> list[dict[str, Any]]:
-    """Lista las tareas de una lista específica ('@default' es la principal)."""
+    """Lista las tareas de una lista específica ('@default' representa la lista principal).
+
+    Args:
+        tasklist_id: Identificador de la lista de tareas (por defecto '@default').
+        show_completed: Si es True, incluye también tareas ya marcadas como completadas.
+        max_results: Límite máximo de tareas a recuperar (1 a 100).
+
+    Returns:
+        list[dict[str, Any]]: Tareas con id, title, notes, status, due y webViewLink.
+
+    Raises:
+        RuntimeError: Si la consulta a la API de Google falla.
+    """
     service = get_tasks_service()
     res = (
         service.tasks()
@@ -134,9 +193,28 @@ def create_task(
     tasklist_id: str = "@default",
     parent: str = "",
 ) -> dict[str, Any]:
-    """Crea una nueva tarea en Google Tasks."""
+    """Crea una nueva tarea en Google Tasks con fecha límite y notas opcionales.
+
+    Args:
+        title: Título de la tarea.
+        notes: Descripción, instrucciones o enlaces asociados a la tarea.
+        due: Fecha de vencimiento en formato YYYY-MM-DD (ej. '2026-11-20').
+        tasklist_id: ID de la lista donde crear la tarea ('@default' para principal).
+        parent: ID de la tarea padre si se desea anidar como subtarea.
+
+    Returns:
+        dict[str, Any]: Objeto de la tarea creada por la API de Google Tasks.
+
+    Raises:
+        ValueError: Si el título está vacío.
+        RuntimeError: Si la inserción falla en Google Tasks.
+    """
+    clean_title = title.strip()
+    if not clean_title:
+        raise ValueError("El título de la tarea no puede estar vacío.")
+
     service = get_tasks_service()
-    body: dict[str, Any] = {"title": title}
+    body: dict[str, Any] = {"title": clean_title}
     if notes:
         body["notes"] = notes
     norm_due = _normalize_due(due)
@@ -158,12 +236,32 @@ def update_task(
     due: str = "",
     tasklist_id: str = "@default",
 ) -> dict[str, Any]:
-    """Actualiza una tarea existente."""
+    """Actualiza los campos de una tarea existente en Google Tasks.
+
+    Args:
+        task_id: Identificador de la tarea a modificar.
+        title: Nuevo título (dejar vacío para mantener el actual).
+        notes: Nuevas notas (dejar vacío para mantener las actuales).
+        status: 'needsAction' (pendiente) o 'completed' (completada).
+        due: Nueva fecha de entrega YYYY-MM-DD (dejar vacío para mantener).
+        tasklist_id: ID de la lista que contiene la tarea.
+
+    Returns:
+        dict[str, Any]: Tarea actualizada tras llamar a la API.
+
+    Raises:
+        ValueError: Si task_id está vacío.
+        RuntimeError: Si la actualización en Google falla.
+    """
+    clean_id = task_id.strip()
+    if not clean_id:
+        raise ValueError("task_id es obligatorio para actualizar una tarea.")
+
     service = get_tasks_service()
-    current = service.tasks().get(tasklist=tasklist_id, task=task_id).execute()
+    current = service.tasks().get(tasklist=tasklist_id, task=clean_id).execute()
 
     if title:
-        current["title"] = title
+        current["title"] = title.strip()
     if notes:
         current["notes"] = notes
     if status in ("needsAction", "completed"):
@@ -176,21 +274,45 @@ def update_task(
 
     return (
         service.tasks()
-        .update(tasklist=tasklist_id, task=task_id, body=current)
+        .update(tasklist=tasklist_id, task=clean_id, body=current)
         .execute()
     )
 
 
 def complete_task(task_id: str, tasklist_id: str = "@default") -> dict[str, Any]:
-    """Marca una tarea como completada."""
+    """Marca una tarea como completada ('completed') en Google Tasks.
+
+    Args:
+        task_id: ID de la tarea a dar por finalizada.
+        tasklist_id: ID de la lista donde reside la tarea (por defecto '@default').
+
+    Returns:
+        dict[str, Any]: Metadatos de la tarea actualizada.
+    """
     return update_task(task_id=task_id, status="completed", tasklist_id=tasklist_id)
 
 
 def delete_task(task_id: str, tasklist_id: str = "@default") -> dict[str, str]:
-    """Elimina una tarea."""
+    """Elimina permanentemente una tarea de Google Tasks.
+
+    Args:
+        task_id: ID de la tarea a eliminar.
+        tasklist_id: ID de la lista de tareas correspondiente.
+
+    Returns:
+        dict[str, str]: Confirmación {'status': 'deleted', 'task_id': task_id}.
+
+    Raises:
+        ValueError: Si task_id está vacío.
+        RuntimeError: Si la API de Google no puede eliminar la tarea.
+    """
+    clean_id = task_id.strip()
+    if not clean_id:
+        raise ValueError("task_id es obligatorio para eliminar una tarea.")
+
     service = get_tasks_service()
-    service.tasks().delete(tasklist=tasklist_id, task=task_id).execute()
-    return {"status": "deleted", "task_id": task_id}
+    service.tasks().delete(tasklist=tasklist_id, task=clean_id).execute()
+    return {"status": "deleted", "task_id": clean_id}
 
 
 if mcp:

@@ -142,6 +142,15 @@ python aulavirtual_server.py deadlines
 # Ver asignaturas matriculadas
 python aulavirtual_server.py courses
 
+# Ver notas del libro de calificaciones (global o por asignatura)
+python aulavirtual_server.py grades --course SJK004
+
+# Detectar materiales nuevos o modificados en Moodle
+python aulavirtual_server.py new-materials --course SJK004
+
+# Ver avisos y notificaciones de la campana
+python aulavirtual_server.py notifications
+
 # Sincronizar entregas pendientes con Google Tasks
 python aulavirtual_server.py sync
 
